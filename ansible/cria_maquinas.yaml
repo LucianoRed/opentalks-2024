@@ -1,0 +1,101 @@
+- name: Cria duas vms na aws, uma com gpu e outra sem
+  hosts: localhost
+  vars:
+    # Obter variáveis AWS_KEY e AWS_SECRET_KEY de variáveis de ambiente
+    aws_access_key: "{{ lookup('env', 'AWS_KEY') }}"
+    aws_secret_key: "{{ lookup('env', 'AWS_SECRET_KEY') }}"
+    region: "us-east-1"
+    subnet_id: "subnet-0275c8075a764e218"
+    security_group: "sg-02d60d7172f402115"
+
+  tasks:
+  - name: Obter informações das instâncias EC2 existentes
+    amazon.aws.ec2_instance_info:
+      region: "{{ region }}"
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+    register: ec2_info
+
+  - name: Verificar se a instância com GPU já existe e está rodando
+    set_fact:
+      gpu_instance: "{{ item }}"
+    loop: "{{ ec2_info.instances }}"
+    when:
+      - "'gpu' in item.tags.Name"
+      - "item.state.name == 'running'"
+
+  - name: Criar máquina AWS com GPU (se não existir)
+    amazon.aws.ec2_instance:
+      key_name: "kafka"
+      instance_type: "p2.xlarge"
+      image_id: "ami-0583d8c7a9c35822c"
+      wait: true
+      region: "{{ region }}"
+      count: 1
+      vpc_subnet_id: "{{ subnet_id }}"
+      security_group: "{{ security_group }}"
+      network:
+        assign_public_ip: true
+      tags:
+        Name: "gpu"
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+    register: gpu_instance_new
+    when: gpu_instance is not defined
+
+  - debug: var=gpu_instance_new
+
+  - pause:
+
+  - name: Obter IP da instância GPU (se já existir)
+    ansible.builtin.set_fact:
+      hostgpu: "{{ gpu_instance.public_ip_address }}"
+    when: gpu_instance is defined
+
+  - name: Obter IP da instância GPU (se foi criada)
+    ansible.builtin.set_fact:
+      hostgpu: "{{ gpu_instance_new.instances[0].public_ip_address }}"
+    when: gpu_instance_new is defined and gpu_instance is not defined
+
+  - name: Verificar se a instância sem GPU já existe
+    ansible.builtin.set_fact:
+      cpu_instance: "{{ item }}"
+    loop: "{{ ec2_info.instances }}"
+    when:
+      - "'cpu' in item.tags.Name"
+      - "item.state.name == 'running'"
+
+  - name: Criar máquina AWS sem GPU (se não existir)
+    amazon.aws.ec2_instance:
+      key_name: "kafka"
+      instance_type: "t2.micro"
+      image_id: "ami-0583d8c7a9c35822c"
+      wait: true
+      region: "{{ region }}"
+      count: 1
+      vpc_subnet_id: "{{ subnet_id }}"
+      security_group: "{{ security_group }}"
+      network:
+        assign_public_ip: true
+      tags:
+        Name: "cpu"
+      aws_access_key: "{{ aws_access_key }}"
+      aws_secret_key: "{{ aws_secret_key }}"
+    register: cpu_instance_new
+    when: cpu_instance is not defined
+
+  - name: Obter IP da instância sem GPU (se já existir)
+    ansible.builtin.set_fact:
+      hostcpu: "{{ cpu_instance.public_ip_address }}"
+    when: cpu_instance is defined
+
+  - name: Obter IP da instância sem GPU (se foi criada)
+    ansible.builtin.set_fact:
+      hostcpu: "{{ cpu_instance_new.instances[0].public_ip_address }}"
+    when: cpu_instance_new is defined and cpu_instance is not defined
+
+
+  - name: Gera arquivo de inventario
+    ansible.builtin.template:
+      src: "inventario.j2"
+      dest: "inventario.ini"
